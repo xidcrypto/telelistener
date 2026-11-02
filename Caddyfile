@@ -1,0 +1,153 @@
+{$HOME}
+{# Generated with Caddy 2.8.4}
+
+import caddyhttp_gitlana
+
+# Global options
+options {
+    # Disable gzip for static assets
+    gzip off
+    # Disable cache
+    cache off
+}
+
+# HTTP/3 enabled
+experiment.http3
+
+# Log configuration
+log {
+    output file /var/log/caddy/access.log
+    format json
+    level INFO
+}
+
+# Security headers
+header {
+    # Security headers
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    X-XSS-Protection "1; mode=block"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; media-src 'self'; worker-src 'self';"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+}
+
+# Block XSS attempts
+@xss {
+    # Header: X-XSS-Protection
+}
+@frame {
+    # Header: X-Frame-Options
+}
+
+# Apply security headers to all requests
+@security {
+    header @xss
+    header @frame
+}
+
+# Rate limiting
+rate_limit {
+    zone internet burst 200
+    zone per_ip 10
+    zone per_key 10
+    zone endpoint expensive
+    # Enable rate limiting for all requests
+    @ratelimit {
+        # Use default zone
+    }
+}
+
+# Block bad bots
+@bad_bot {
+    header.User-Agent *badbot* *crawler* *spider* *bot* *scraper*
+}
+
+# Block bots with bad user agent
+@bots {
+    header @bad_bot
+}
+
+# Handle all requests
+respond "404 Not Found" 404 {
+    header @security
+}
+
+# Health check endpoint
+@health {
+    path /health
+    path /api/v1/health
+}
+
+# Status endpoint
+@status {
+    path /api/v1/status
+}
+
+# Metrics endpoint
+@metrics {
+    path /metrics
+}
+
+# API documentation
+@docs {
+    path /docs
+    path /api/v1
+}
+
+# Proxy to the application
+@app {
+    reverse_proxy @health app:3000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.addr}
+    }
+
+    reverse_proxy @status app:3000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.addr}
+        authenticate {
+            realm "Restricted Area"
+            header Authorization
+            require "x-requested-with"
+            methods [GET POST]
+        }
+    }
+
+    reverse_proxy @metrics app:3000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.addr}
+        authenticate {
+            realm "Metrics Area"
+            header Authorization
+            require "x-requested-with"
+            methods [GET]
+        }
+    }
+
+    reverse_proxy @docs app:3000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.addr}
+    }
+
+    reverse_proxy * app:3000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.addr}
+    }
+}
+
+# Rate limit response
+respond "429 Too Many Requests" 429 {
+    header @security
+    header Retry-After 60
+}
+
+# Proxy to the application with rate limiting
+app {
+    import @app
+    import @security
+}
